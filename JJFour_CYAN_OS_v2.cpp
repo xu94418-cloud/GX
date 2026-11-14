@@ -1,0 +1,308 @@
+#include "FourFeatures.hpp"
+#include "RestoreAll.hpp"
+extern "C" {
+void *dlsym(void *,const char *);
+int vsnprintf(char *,JJSize,const char *,__builtin_va_list);
+int snprintf(char *,JJSize,const char *,...);
+int strcmp(const char*,const char*);
+float strtof(const char*,char**);
+void dispatch_async_f(void*,void*,void(*)(void*));
+void dispatch_after_f(JJAddr,void*,void*,void(*)(void*));
+JJAddr dispatch_time(JJAddr,long long);
+void *dispatch_get_global_queue(long,unsigned long);
+void *pthread_self(void);
+void *pthread_get_stackaddr_np(void*);
+JJSize pthread_get_stacksize_np(void*);
+}
+typedef void *id;typedef void *SEL;struct Rect{double x,y,w,h;};struct Point{double x,y;};struct Size{double w,h;};
+static void *msg;static id (*getClass)(const char*);static SEL (*getSel)(const char*);static void *mainq;
+template<class T>static T symbol(const char*n){
+#ifdef JJFOUR_UI_TEST
+ return (T)dlsym((void*)0,n);
+#else
+ return (T)dlsym((void*)-2,n);
+#endif
+}
+static id cls(const char*n){return getClass(n);}static SEL sel(const char*n){return getSel(n);}
+static id send0(id o,const char*s){return ((id(*)(id,SEL))msg)(o,sel(s));}
+static id send1(id o,const char*s,id a){return ((id(*)(id,SEL,id))msg)(o,sel(s),a);}
+static void setnum(id o,const char*s,long v){((void(*)(id,SEL,long))msg)(o,sel(s),v);}
+static void frame(id o,Rect r){((void(*)(id,SEL,Rect))msg)(o,sel("setFrame:"),r);}
+static id string(const char*s){return send1(cls("NSString"),"stringWithUTF8String:",(id)s);}
+static id make(const char*n){return send0(send0(cls(n),"alloc"),"init");}
+static void settitle(id o,const char*s){((void(*)(id,SEL,id,long))msg)(o,sel("setTitle:forState:"),string(s),0);}
+static id window,menuCard,menuScroll,actions,header,buttons[4],stateLabels[4],statusLabel,logButton;static bool menuVisible,menuClosing,entryDimmed;
+static unsigned menuAnimationSerial,idleSerial;
+static id menuBlur,glassTint,rowSpinners[4],customSpinner,floatingSpinner,floatingIcon;
+static id presetButtons[4],restoreButton,performanceButton;
+static bool performanceMode;
+static JJRestoreSummary restoreSummary;
+static const unsigned restoreAllJob=5;
+static id floatingButton,floatingContainer,titleBar,titleLabel,subtitleLabel,rows[4],nameLabels[4];static id sideBar,sideNavLabel,sideMarkLabel,rightPanel,featureIconLabels[4],headerStatusLabel,runTitleLabel,runDetailLabel,liveTitleLabel,liveDetailLabel,sideNavHighlight;
+static id customRow,customTitle,customHint,customInput,customButton,speedMinusButton,speedPlusButton;static float customJobSpeed=4.0f;
+static Rect floatingRect={16,96,52,52},menuRect;
+static double floatingX=.02,floatingY=.22,menuX=.5,menuY=.5;
+static double observedWidth,observedHeight;
+#ifdef JJFOUR_UI_TEST
+static bool testLandscape=true;
+#endif
+static Rect snapEntry(Rect,Rect);
+static bool layoutPending;static unsigned jobSerial;static unsigned jobFeature;static bool jobEnable;
+static int busy,cancelFlag;static JJAddr ownLow,ownHigh,stackLow,stackHigh,startTicks,readBytes;static bool blocked;
+static JJFeatureState states[5];static char logs[16000];static JJSize logUsed;
+static void logadd(const char*fmt,...){if(logUsed>=sizeof(logs)-1)return;__builtin_va_list a;__builtin_va_start(a,fmt);int n=vsnprintf(logs+logUsed,sizeof(logs)-logUsed,fmt,a);__builtin_va_end(a);if(n>0){JJSize rem=sizeof(logs)-logUsed-1;logUsed+=(JJSize)n>rem?rem:(JJSize)n;}}
+static JJAddr (*ticks)();static unsigned numer=1,denom=1;static JJAddr elapsed(){return (ticks()-startTicks)*numer/denom/1000000;}
+typedef int(*RegionFn)(JJWord,JJAddr*,JJAddr*,int,int*,JJWord*,JJWord*);
+typedef int(*ReadFn)(JJWord,JJAddr,JJAddr,JJAddr,JJAddr*);
+typedef int(*WriteFn)(JJWord,JJAddr,JJAddr,JJWord);
+static RegionFn regionFn;static ReadFn readFn;static WriteFn writeFn;static int(*deallocFn)(JJWord,JJWord);static JJWord task;static int lastError;
+static bool nextregion(void*,JJAddr cursor,JJRegion*out){JJAddr a=cursor,n=0;int info[32]={};JJWord count=32,obj=0;int k=regionFn(task,&a,&n,9,info,&count,&obj);if(obj&&deallocFn)deallocFn(task,obj);if(k)return false;*out={a,n,(JJWord)info[0]};return true;}
+static bool readmemory(void*,JJAddr a,void*out,JJSize n){JJAddr got=0;int k=readFn(task,a,n,(JJAddr)out,&got);if(k||got!=n){lastError=k?k:-1;return false;}__atomic_fetch_add(&readBytes,(JJAddr)n,__ATOMIC_RELAXED);return true;}
+static bool writememory(void*,JJAddr a,const void*data,JJSize n){int k=writeFn(task,a,(JJAddr)data,(JJWord)n);if(k)lastError=k;return k==0;}
+static bool excluded(void*,JJAddr a){if((a>=ownLow&&a<ownHigh)||(a>=stackLow&&a<stackHigh))return true;for(JJBlock*b=jj_blocks;b;b=b->next)if(a>=(JJAddr)b&&a<(JJAddr)(b+1)+b->bytes)return true;return false;}
+static bool cancelled(void*){return __atomic_load_n(&cancelFlag,__ATOMIC_RELAXED)||elapsed()>180000;}
+static id color(double r,double g,double b,double alpha=1.0){return ((id(*)(id,SEL,double,double,double,double))msg)(cls("UIColor"),sel("colorWithRed:green:blue:alpha:"),r,g,b,alpha);}
+static bool reduceMotion(){bool(*fn)()=symbol<bool(*)()>("UIAccessibilityIsReduceMotionEnabled");return fn&&fn();}
+static bool reduceTransparency(){bool(*fn)()=symbol<bool(*)()>("UIAccessibilityIsReduceTransparencyEnabled");return fn&&fn();}
+static void animateAlpha(id view,double alpha,double duration){if(performanceMode||reduceMotion()||duration<=0){((void(*)(id,SEL,double))msg)(view,sel("setAlpha:"),alpha);return;}id ui=cls("UIView");((void(*)(id,SEL,id,void*))msg)(ui,sel("beginAnimations:context:"),0,0);((void(*)(id,SEL,double))msg)(ui,sel("setAnimationDuration:"),duration);setnum(ui,"setAnimationBeginsFromCurrentState:",1);setnum(ui,"setAnimationCurve:",2);((void(*)(id,SEL,double))msg)(view,sel("setAlpha:"),alpha);send0(ui,"commitAnimations");}
+static void idleDim(void*p){if((unsigned)(JJAddr)p!=idleSerial||menuVisible||menuClosing||busy)return;entryDimmed=true;animateAlpha(floatingButton,.58,.35);}
+static void wakeFloating(){idleSerial++;if(entryDimmed){entryDimmed=false;animateAlpha(floatingButton,1,.12);}}
+static void scheduleDim(){if(menuVisible||menuClosing||busy)return;idleSerial++;dispatch_after_f(dispatch_time(0,4000000000LL),mainq,(void*)(JJAddr)idleSerial,idleDim);}
+static void spin(id indicator,bool on){send0(indicator,on&&!performanceMode?"startAnimating":"stopAnimating");}
+static id spinner(id tint){id v=((id(*)(id,SEL,long))msg)(send0(cls("UIActivityIndicatorView"),"alloc"),sel("initWithActivityIndicatorStyle:"),100);send1(v,"setColor:",tint);setnum(v,"setHidesWhenStopped:",1);setnum(v,"setUserInteractionEnabled:",0);return v;}
+static void border(id view,double width,id tint){id layer=send0(view,"layer");((void(*)(id,SEL,double))msg)(layer,sel("setBorderWidth:"),width);send1(layer,"setBorderColor:",send0(tint,"CGColor"));}
+static void glow(id view,id tint,float opacity,double blur){id layer=send0(view,"layer");send1(layer,"setShadowColor:",send0(tint,"CGColor"));((void(*)(id,SEL,float))msg)(layer,sel("setShadowOpacity:"),opacity);((void(*)(id,SEL,double))msg)(layer,sel("setShadowRadius:"),blur);((void(*)(id,SEL,Size))msg)(layer,sel("setShadowOffset:"),(Size){0,0});}
+static void radius(id view,double r){((void(*)(id,SEL,double))msg)(send0(view,"layer"),sel("setCornerRadius:"),r);}
+static Rect screenRect(){
+#ifdef JJFOUR_UI_TEST
+ return {0,0,844,390};
+#else
+ if(window)return ((Rect(*)(id,SEL))msg)(window,sel("bounds"));
+ id app=send0(cls("UIApplication"),"sharedApplication"),host=send0(app,"keyWindow");if(!host)host=send0(send0(app,"windows"),"firstObject");if(host)return ((Rect(*)(id,SEL))msg)(host,sel("bounds"));return ((Rect(*)(id,SEL))msg)(send0(cls("UIScreen"),"mainScreen"),sel("bounds"));
+#endif
+}
+static Rect clampRect(Rect r,Rect bounds){double maxX=bounds.w-r.w-8,maxY=bounds.h-r.h-8;if(maxX<8)maxX=8;if(maxY<8)maxY=8;if(r.x<8)r.x=8;if(r.y<8)r.y=8;if(r.x>maxX)r.x=maxX;if(r.y>maxY)r.y=maxY;return r;}
+static bool inside(Point p,Rect r){return p.x>=r.x&&p.y>=r.y&&p.x<r.x+r.w&&p.y<r.y+r.h;}
+static int hitTarget(Point p){if(inside(p,floatingRect))return 1;if((menuVisible||menuClosing)&&inside(p,menuRect))return 2;return 0;}
+static Point convertPoint(id view,Point p,id from){
+#ifdef JJFOUR_UI_TEST
+ (void)view;(void)from;return p;
+#else
+ return ((Point(*)(id,SEL,Point,id))msg)(view,sel("convertPoint:fromView:"),p,from);
+#endif
+}
+static id overlayHitTest(id self,SEL,Point p,id event){Point q=convertPoint(floatingContainer,p,self);int target=hitTarget(q);if(target==1)return floatingButton;if(target==2){if(menuClosing)return menuCard;Point local=convertPoint(menuCard,p,self);return ((id(*)(id,SEL,Point,id))msg)(menuCard,sel("hitTest:withEvent:"),local,event);}return 0;}
+static double bounded(double x){if(!(x>=0))return 0;if(x>1)return 1;return x;}
+static void rememberPosition(bool menu){Rect b=screenRect(),r=menu?menuRect:floatingRect;double x=b.w>r.w?r.x/(b.w-r.w):0,y=b.h>r.h?r.y/(b.h-r.h):0;x=bounded(x);y=bounded(y);if(menu){menuX=x;menuY=y;}else{floatingX=x;floatingY=y;}id defaults=send0(cls("NSUserDefaults"),"standardUserDefaults");((void(*)(id,SEL,double,id))msg)(defaults,sel("setDouble:forKey:"),x,string(menu?"JJFour.menu.x":"JJFour.entry.x"));((void(*)(id,SEL,double,id))msg)(defaults,sel("setDouble:forKey:"),y,string(menu?"JJFour.menu.y":"JJFour.entry.y"));((void(*)(id,SEL,long,id))msg)(defaults,sel("setBool:forKey:"),1,string(menu?"JJFour.menu.saved":"JJFour.entry.saved"));}
+static void loadPositions(){id d=send0(cls("NSUserDefaults"),"standardUserDefaults");for(unsigned i=0;i<2;i++){bool menu=i!=0;bool has=((long(*)(id,SEL,id))msg)(d,sel("boolForKey:"),string(menu?"JJFour.menu.saved":"JJFour.entry.saved"));if(!has)continue;double x=((double(*)(id,SEL,id))msg)(d,sel("doubleForKey:"),string(menu?"JJFour.menu.x":"JJFour.entry.x")),y=((double(*)(id,SEL,id))msg)(d,sel("doubleForKey:"),string(menu?"JJFour.menu.y":"JJFour.entry.y"));if(menu){menuX=bounded(x);menuY=bounded(y);}else{floatingX=bounded(x);floatingY=bounded(y);}}}
+static void layoutMenu(){
+ Rect screen=screenRect();
+ double W=screen.w,H=screen.h;
+ double margin=H*.018; if(margin<6)margin=6;
+ double w=W-margin*2,h=H-margin*2;
+ if(w>1600)w=1600;if(h>1000)h=1000;
+ double sx=w/1504.0,sy=h/826.0;
+ menuRect=clampRect({(W-w)*.5,(H-h)*.5,w,h},screen);
+ frame(floatingContainer,{0,0,W,H});floatingRect=snapEntry({floatingX*(W-52),floatingY*(H-52),52,52},screen);frame(floatingButton,floatingRect);
+ frame(menuCard,menuRect);frame(menuBlur,{0,0,w,h});frame(glassTint,{0,0,w,h});
+ // Coordinates follow the supplied 1536x864 master artwork; scale uniformly by axis.
+ double headerH=108*sy, footerH=116*sy;
+ double contentY=headerH+24*sy, contentH=h-contentY-footerH-12*sy;
+ double sideW=226*sx,rightW=280*sx,gap=18*sx,leftX=22*sx,rightX=w-22*sx-rightW;
+ double centerX=22*sx+sideW+gap,centerW=rightX-gap-centerX;
+ frame(titleBar,{0,0,w,headerH});
+ frame(titleLabel,{154*sx,12*sy,460*sx,44*sy});
+ frame(subtitleLabel,{154*sx,62*sy,520*sx,25*sy});
+ frame(headerStatusLabel,{w-590*sx,22*sy,405*sx,52*sy});
+ frame(header,{w-112*sx,22*sy,78*sx,50*sy});
+ frame(sideBar,{leftX,contentY,sideW,contentH});
+ frame(sideNavHighlight,{8*sx,24*sy,sideW-16*sx,66*sy});
+ frame(sideNavLabel,{18*sx,34*sy,sideW-36*sx,410*sy});
+ frame(sideMarkLabel,{12*sx,contentH-178*sy,sideW-24*sx,160*sy});
+ frame(rightPanel,{rightX,contentY,rightW,contentH});
+ frame(runTitleLabel,{24*sx,16*sy,rightW-48*sx,36*sy});
+ frame(runDetailLabel,{26*sx,62*sy,rightW-52*sx,170*sy});
+ frame(liveTitleLabel,{24*sx,contentH*.53,rightW-48*sx,36*sy});
+ frame(liveDetailLabel,{26*sx,contentH*.53+44*sy,rightW-52*sx,contentH*.42-50*sy});
+ frame(statusLabel,{18*sx,contentH-36*sy,rightW-36*sx,26*sy});
+ double rateH=150*sy;
+ frame(customRow,{centerX,contentY,centerW,rateH});
+ frame(customTitle,{30*sx,12*sy,centerW-60*sx,32*sy});
+ frame(customHint,{30*sx,48*sy,centerW-60*sx,20*sy});
+ double ctlY=76*sy,ctlH=54*sy,applyW=150*sx,stepW=48*sx,presetW=90*sx;
+ double inputW=centerW-30*sx-applyW-stepW*2-presetW*4-44*sx;
+ if(inputW<70*sx)inputW=70*sx;
+ frame(customInput,{30*sx,ctlY,inputW,ctlH});
+ frame(speedMinusButton,{38*sx+inputW,ctlY,stepW,ctlH});
+ frame(speedPlusButton,{44*sx+inputW+stepW,ctlY,stepW,ctlH});
+ double presetStart=56*sx+inputW+stepW*2;
+ for(unsigned i=0;i<4;i++)frame(presetButtons[i],{presetStart+i*(presetW+8*sx),ctlY,presetW,ctlH});
+ frame(customButton,{centerW-applyW-22*sx,ctlY,applyW,ctlH});
+ frame(customSpinner,{centerW-applyW-6*sx,ctlY+16*sy,22*sx,22*sy});
+ double cardsY=contentY+rateH+24*sy,cardsH=contentH-rateH-42*sy;
+ double cardGap=24*sx,cardW=(centerW-cardGap)*.5,cardH=(cardsH-cardGap)*.5;
+ if(cardH<52*sy)cardH=52*sy;
+ frame(menuScroll,{centerX,cardsY,centerW,cardsH});
+ ((void(*)(id,SEL,Size))msg)(menuScroll,sel("setContentSize:"),(Size){centerW,cardH*2+cardGap});
+ for(unsigned i=0;i<4;i++){
+  double x=(i%2)*(cardW+cardGap),y=(i/2)*(cardH+cardGap);
+  frame(rows[i],{x,y,cardW,cardH});
+  frame(featureIconLabels[i],{26*sx,(cardH-72*sy)*.5,72*sx,72*sy});
+  frame(nameLabels[i],{108*sx,26*sy,cardW-220*sx,36*sy});
+  frame(stateLabels[i],{108*sx,68*sy,cardW-220*sx,28*sy});
+  frame(buttons[i],{cardW-100*sx,(cardH-52*sy)*.5,78*sx,52*sy});
+  frame(rowSpinners[i],{cardW-70*sx,(cardH-30*sy)*.5,30*sx,30*sy});
+ }
+ double actionGap=42*sx,actionY=h-footerH+16*sy,actionH=82*sy,actionW=(w-2*40*sx-2*actionGap)/3;
+ frame(restoreButton,{40*sx,actionY,actionW,actionH});
+ frame(performanceButton,{40*sx+actionW+actionGap,actionY,actionW,actionH});
+ frame(logButton,{40*sx+2*(actionW+actionGap),actionY,actionW,actionH});
+}
+static bool landscapeReady(Rect r,long orientation){return r.w>0&&r.h>0&&r.w>r.h&&(orientation==0||orientation==3||orientation==4);}
+static bool gameLandscape(){
+#ifdef JJFOUR_UI_TEST
+ return testLandscape;
+#else
+ if(!window)return false;id scene=send0(window,"windowScene");long o=scene?((long(*)(id,SEL))msg)(scene,sel("interfaceOrientation")):0;return landscapeReady(screenRect(),o);
+#endif
+}
+static void orientationLayout(void*){layoutPending=false;if(!gameLandscape()){send0(customInput,"resignFirstResponder");setnum(floatingContainer,"setHidden:",1);return;}layoutMenu();setnum(floatingContainer,"setHidden:",0);}
+static void orientationAction(id,SEL,id){if(layoutPending)return;layoutPending=true;dispatch_after_f(dispatch_time(0,150000000LL),mainq,0,orientationLayout);}
+static void overlayLayout(id self,SEL cmd){
+#ifndef JJFOUR_UI_TEST
+ struct Super {id receiver;id parent;};Super sup={self,cls("UIView")};void(*callSuper)(Super*,SEL)=symbol<void(*)(Super*,SEL)>("objc_msgSendSuper");if(callSuper)callSuper(&sup,cmd);
+ Rect r=((Rect(*)(id,SEL))msg)(self,sel("bounds"));if(r.w!=observedWidth||r.h!=observedHeight){observedWidth=r.w;observedHeight=r.h;orientationAction(0,0,0);}
+#else
+ (void)self;(void)cmd;
+#endif
+}
+static const char *featureName(unsigned f){return f==restoreAllJob?"一键还原":f==4?"自定义攻速":jj_name(f);}
+static bool parseSpeed(const char *text,float *out){if(!text)return false;char *end=0;float v=strtof(text,&end);if(end==text)return false;while(*end==' '||*end=='\t'||*end=='\n')end++;if(*end||!(v>0)||(jj_float(v)&0x7f800000U)==0x7f800000U)return false;*out=v;return true;}
+static void speedStepAction(id,SEL,id sender){if(busy||blocked||states[0].enabled||states[4].enabled)return;id text=send0(customInput,"text");const char*raw=(const char*)send0(text,"UTF8String");float value=4.0f;if(!parseSpeed(raw,&value))value=4.0f;long direction=((long(*)(id,SEL))msg)(sender,sel("tag"))?1:-1;value+=direction*.1f;if(value<.1f)value=.1f;if(value>99.0f)value=99.0f;char out[32];snprintf(out,sizeof(out),"%.2f",(double)value);send1(customInput,"setText:",string(out));send1(statusLabel,"setText:",string("倍率已调整，点击应用后生效"));}
+static void updateButtons(){
+ for(unsigned f=0;f<4;f++){
+  ((void(*)(id,SEL,long,long))msg)(buttons[f],sel("setOn:animated:"),states[f].enabled,!performanceMode);send1(rows[f],"setBackgroundColor:",states[f].enabled?color(.004,.075,.13,.99):color(.003,.018,.04,.99));border(rows[f],states[f].enabled?1.8:1.1,states[f].enabled?color(.02,.84,1,1):color(.015,.62,.9,.86));glow(rows[f],color(.01,.72,1),states[f].enabled?.48f:.18f,states[f].enabled?13.0:6.0);setnum(buttons[f],"setEnabled:",!busy&&!blocked&&!(f==0&&states[4].enabled));
+  bool pending=busy&&(jobFeature==f||(jobFeature==restoreAllJob&&states[f].enabled));setnum(buttons[f],"setHidden:",pending&&!performanceMode);spin(rowSpinners[f],pending);
+  send1(stateLabels[f],"setText:",string(pending?(jobEnable?"正在扫描目标…":"正在恢复…"):f==0?"提升角色攻击速度":f==1?"优化射手蓄力机制":f==2?"强化重击与大招效果":"风主技能快速触发"));send1(stateLabels[f],"setTextColor:",states[f].enabled?(states[f].verified?color(.25,.85,.65):color(1,.65,.35)):color(.52,.58,.67));
+ }
+ char hint[100];if(states[4].enabled){float v;memcpy(&v,&states[4].activeValue,4);snprintf(hint,sizeof(hint),"已启用 %.6g 倍",(double)v);}else snprintf(hint,sizeof(hint),"与四倍攻速互斥");send1(customHint,"setText:",string(hint));settitle(customButton,states[4].enabled?"还原":"应用");setnum(customButton,"setEnabled:",!busy&&!blocked&&!states[0].enabled);setnum(customInput,"setEnabled:",!busy&&!blocked&&!states[0].enabled&&!states[4].enabled);
+ bool customPending=busy&&(jobFeature==4||(jobFeature==restoreAllJob&&states[4].enabled));setnum(customButton,"setHidden:",customPending&&!performanceMode);spin(customSpinner,customPending);if(customPending)send1(customHint,"setText:",string(jobEnable?"查找中…":"还原中…"));
+ bool floatPending=busy&&!performanceMode;spin(floatingSpinner,floatPending);((void(*)(id,SEL,id,long))msg)(floatingButton,sel("setImage:forState:"),floatPending?0:floatingIcon,0);settitle(floatingButton,floatPending||floatingIcon?"":"JJ");
+ bool any=false;unsigned enabledCount=0;JJSize recordCount=0;for(unsigned i=0;i<5;i++){if(states[i].enabled||states[i].count)any=true;if(states[i].enabled)enabledCount++;recordCount+=states[i].count;}
+ char runText[256],liveText[256];snprintf(runText,sizeof(runText),"注入状态：%s\n功能模块：%u / 4\n游戏状态：%s\n性能模式：%s",blocked?"冲突":"✓ 已注入",enabledCount,busy?"正在执行":"运行中",performanceMode?"开启":"关闭");send1(runDetailLabel,"setText:",string(runText));
+ snprintf(liveText,sizeof(liveText),"记录数量：%llu\n扫描读取：%llu MiB\n运行时间：%llu 秒\n当前任务：%s",(unsigned long long)recordCount,(unsigned long long)(__atomic_load_n(&readBytes,__ATOMIC_RELAXED)/1024/1024),(unsigned long long)(startTicks?elapsed():0),busy?featureName(jobFeature):"无");send1(liveDetailLabel,"setText:",string(liveText));
+ settitle(restoreButton,busy&&jobFeature==restoreAllJob?"正在还原…":"⟳  一键还原");setnum(restoreButton,"setEnabled:",!busy&&!blocked&&any);settitle(performanceButton,performanceMode?"性能模式：开":"性能模式：关");setnum(performanceButton,"setEnabled:",!busy);for(unsigned i=0;i<4;i++)setnum(presetButtons[i],"setEnabled:",!busy&&!blocked&&!states[0].enabled&&!states[4].enabled);
+ settitle(header,busy?(jobEnable?"取消查找":"正在还原"):"关闭");setnum(logButton,"setEnabled:",!busy);
+}
+static void applyPerformanceStyle(){bool solid=performanceMode||reduceTransparency();if(menuBlur){id effect=solid?0:((id(*)(id,SEL,long))msg)(cls("UIBlurEffect"),sel("effectWithStyle:"),17);send1(menuBlur,"setEffect:",effect);setnum(menuBlur,"setHidden:",solid);}send1(menuCard,"setBackgroundColor:",solid||!menuBlur?color(.018,.038,.075,.98):send0(cls("UIColor"),"clearColor"));((void(*)(id,SEL,float))msg)(send0(floatingButton,"layer"),sel("setShadowOpacity:"),performanceMode?0.0f:.42f);}
+static void performanceAction(id,SEL,id){if(busy||menuClosing)return;performanceMode=!performanceMode;id d=send0(cls("NSUserDefaults"),"standardUserDefaults");((void(*)(id,SEL,long,id))msg)(d,sel("setBool:forKey:"),performanceMode,string("JJFour.performance"));applyPerformanceStyle();updateButtons();send1(statusLabel,"setText:",string(performanceMode?"性能模式已开启：实色背景、减少动画":"性能模式已关闭：恢复毛玻璃与动画"));}
+static void finish(void*){
+ busy=0;if(jobFeature==restoreAllJob){char text[240];snprintf(text,sizeof(text),"还原%lu处 · 跳过%lu处 · 失败%lu处\n未完成%lu项，可再次重试",restoreSummary.restored,restoreSummary.skipped,restoreSummary.failed,restoreSummary.remainingFeatures);send1(statusLabel,"setText:",string(text));send1(statusLabel,"setTextColor:",restoreSummary.remainingFeatures?color(1,.55,.48):restoreSummary.skipped?color(.98,.76,.4):color(.34,.86,.68));updateButtons();scheduleDim();logadd("\n一键还原：尝试%lu项，还原%lu处，跳过%lu处，失败%lu处，未完成%lu项\n",restoreSummary.attemptedFeatures,restoreSummary.restored,restoreSummary.skipped,restoreSummary.failed,restoreSummary.remainingFeatures);for(unsigned i=0;i<5;i++)if(restoreSummary.attemptedMask&(1U<<i))logadd("  %s：还原%lu，跳过%lu，失败%lu\n",featureName(i),states[i].report.restored,states[i].report.skipped,states[i].report.failed);return;}JJFeatureState&s=states[jobFeature];JJFeatureReport&r=s.report;char text[240];
+ if(r.error)snprintf(text,sizeof(text),"%s：%s",featureName(jobFeature),r.error);
+ else if(jobEnable)snprintf(text,sizeof(text),"%s：已写入 %lu 处",featureName(jobFeature),r.written);
+ else snprintf(text,sizeof(text),"%s：还原 %lu 处，跳过 %lu 处",featureName(jobFeature),r.restored,r.skipped);
+ send1(statusLabel,"setText:",string(text));send1(statusLabel,"setTextColor:",r.error?color(1,.55,.48):color(.34,.86,.68));updateButtons();scheduleDim();
+ logadd("\n%s / %s\n初次=%lu 联合1=%lu 联合2=%lu 精确=%lu\n准备=%lu 写入=%lu 失败=%lu 还原=%lu 跳过=%lu\n扫描读入=%llu MiB 读取失败=%llu 最后Mach错误=%d\n结果=%s\n",featureName(jobFeature),jobEnable?"开启":"还原",r.initial,r.joint1,r.joint2,r.refined,r.prepared,r.written,r.failed,r.restored,r.skipped,r.bytesRead/1024/1024,r.readFailures,lastError,r.error?r.error:"完成");
+ if(jobFeature==4){float value=customJobSpeed;if(!jobEnable)memcpy(&value,&s.activeValue,4);logadd("自定义倍率=%.9g\n",(double)value);}
+ if(s.count){logadd("记录地址（最多8处）:\n");for(JJSize j=0;j<s.count&&j<8;j++)logadd("  0x%llX\n",s.records[j].address);}
+}
+static void worker(void*){
+ void*th=pthread_self();stackHigh=(JJAddr)pthread_get_stackaddr_np(th);stackLow=stackHigh-pthread_get_stacksize_np(th);startTicks=ticks();__atomic_store_n(&readBytes,0,__ATOMIC_RELAXED);lastError=0;
+ JJIO io={0,nextregion,readmemory,writememory,excluded,cancelled};if(jobFeature==restoreAllJob)jj_restore_all(io,states,restoreSummary);else jj_apply_feature(io,jobFeature==4?JJ_SPEED:jobFeature,jobEnable,states[jobFeature],jobFeature==4?customJobSpeed:4.0f);dispatch_async_f(mainq,0,finish);
+}
+static void progressTick(void*p){if(!busy||(unsigned)(JJAddr)p!=jobSerial)return;char text[180];JJAddr bytes=__atomic_load_n(&readBytes,__ATOMIC_RELAXED);if(!jobEnable)snprintf(text,sizeof(text),"正在还原，请稍候");else if(__atomic_load_n(&cancelFlag,__ATOMIC_RELAXED))snprintf(text,sizeof(text),"正在取消 · 已读取 %llu MiB",bytes/1024/1024);else snprintf(text,sizeof(text),"正在查找 · 已读取 %llu MiB\n右上角可取消",bytes/1024/1024);send1(statusLabel,"setText:",string(text));dispatch_after_f(dispatch_time(0,performanceMode?800000000LL:300000000LL),mainq,p,progressTick);}
+static void beginJob(unsigned f){
+ if(!regionFn||!readFn||!writeFn||!task||!ticks){send1(statusLabel,"setText:",string("系统接口不可用，未执行修改"));updateButtons();return;}
+ wakeFloating();busy=1;jobSerial++;__atomic_store_n(&readBytes,0,__ATOMIC_RELAXED);__atomic_store_n(&cancelFlag,0,__ATOMIC_RELAXED);jobFeature=(unsigned)f;jobEnable=f==restoreAllJob?false:!states[f].enabled;updateButtons();send1(statusLabel,"setText:",string(jobEnable?"正在查找，可点右上角取消":"正在还原"));send1(statusLabel,"setTextColor:",color(.65,.76,.95));dispatch_async_f(dispatch_get_global_queue(-2,0),0,worker);dispatch_after_f(dispatch_time(0,performanceMode?800000000LL:300000000LL),mainq,(void*)(JJAddr)jobSerial,progressTick);
+}
+static void featureAction(id,SEL,id sender){
+ if(busy||blocked||menuClosing){updateButtons();return;}long f=((long(*)(id,SEL))msg)(sender,sel("tag"));if(f<0||f>3)return;if(f==0&&states[4].enabled){send1(statusLabel,"setText:",string("请先还原自定义攻速"));updateButtons();return;}beginJob((unsigned)f);
+}
+static void restoreAllAction(id,SEL,id){if(busy||blocked||menuClosing)return;bool any=false;for(unsigned i=0;i<5;i++)if(states[i].enabled||states[i].count)any=true;if(!any){send1(statusLabel,"setText:",string("没有需要还原的功能"));return;}send0(customInput,"resignFirstResponder");beginJob(restoreAllJob);}
+static void presetAction(id,SEL,id sender){if(busy||blocked||menuClosing)return;if(states[0].enabled||states[4].enabled){send1(statusLabel,"setText:",string("请先还原攻速，再选择倍率"));return;}long i=((long(*)(id,SEL))msg)(sender,sel("tag"));if(i<0||i>3)return;static const char *values[]={"1","2","4","8"};send0(customInput,"resignFirstResponder");send1(customInput,"setText:",string(values[i]));send1(statusLabel,"setText:",string("倍率已填入，点击应用后生效"));}
+static void customSpeedAction(id,SEL,id){
+ if(busy||blocked||menuClosing)return;send0(customInput,"resignFirstResponder");if(states[0].enabled){send1(statusLabel,"setText:",string("请先关闭四倍攻速"));updateButtons();return;}
+ if(!states[4].enabled){id text=send0(customInput,"text");text=((id(*)(id,SEL,id,id))msg)(text,sel("stringByReplacingOccurrencesOfString:withString:"),string(","),string("."));const char *raw=(const char*)send0(text,"UTF8String");float v;if(!parseSpeed(raw,&v)){send1(statusLabel,"setText:",string("请输入大于0的有效倍率，例如2.5"));return;}customJobSpeed=v;id d=send0(cls("NSUserDefaults"),"standardUserDefaults");((void(*)(id,SEL,double,id))msg)(d,sel("setDouble:forKey:"),(double)v,string("JJFour.customSpeed"));}
+ beginJob(4);
+}
+static void finishMenuClose(void*p){if((unsigned)(JJAddr)p!=menuAnimationSerial||menuVisible)return;menuClosing=false;setnum(menuCard,"setHidden:",1);setnum(floatingButton,"setHidden:",0);scheduleDim();}
+static void closeMenu(){send0(customInput,"resignFirstResponder");menuVisible=false;menuClosing=true;menuAnimationSerial++;animateAlpha(menuCard,0,.12);dispatch_after_f(dispatch_time(0,performanceMode||reduceMotion()?0:140000000LL),mainq,(void*)(JJAddr)menuAnimationSerial,finishMenuClose);}
+static void toggleMenuAction(id,SEL,id){wakeFloating();if(menuVisible){closeMenu();return;}menuVisible=true;menuClosing=false;menuAnimationSerial++;layoutMenu();setnum(floatingButton,"setHidden:",1);setnum(menuCard,"setHidden:",0);((void(*)(id,SEL,double))msg)(menuCard,sel("setAlpha:"),0.0);animateAlpha(menuCard,1,.16);}
+static void headerAction(id,SEL,id){
+ if(busy){if(!jobEnable){send1(statusLabel,"setText:",string("正在还原，请稍候"));return;}__atomic_store_n(&cancelFlag,1,__ATOMIC_RELAXED);send1(statusLabel,"setText:",string("正在取消，请稍候"));return;}
+ closeMenu();
+}
+static Point panDelta(id gesture){
+#ifdef JJFOUR_UI_TEST
+ (void)gesture;return {20,30};
+#else
+ return ((Point(*)(id,SEL,id))msg)(gesture,sel("translationInView:"),floatingContainer);
+#endif
+}
+static Rect snapEntry(Rect r,Rect bounds){r=clampRect(r,bounds);r.x=(r.x+r.w/2<bounds.w/2)?8:bounds.w-r.w-8;return clampRect(r,bounds);}
+static void moveView(id gesture,bool menu){wakeFloating();Point p=panDelta(gesture);Rect r=menu?menuRect:floatingRect;r.x+=p.x;r.y+=p.y;r=clampRect(r,screenRect());if(menu){menuRect=r;frame(menuCard,r);}else{floatingRect=r;frame(floatingButton,r);}((void(*)(id,SEL,Point,id))msg)(gesture,sel("setTranslation:inView:"),(Point){0,0},floatingContainer);long state=((long(*)(id,SEL))msg)(gesture,sel("state"));if(state==3||state==4){if(!menu){floatingRect=snapEntry(floatingRect,screenRect());frame(floatingButton,floatingRect);}rememberPosition(menu);scheduleDim();}}
+static void dragAction(id,SEL,id gesture){moveView(gesture,false);}
+static void menuDragAction(id,SEL,id gesture){moveView(gesture,true);}
+static void logAction(id,SEL,id){if(busy)return;send1(send0(cls("UIPasteboard"),"generalPasteboard"),"setString:",string(logs));send1(statusLabel,"setText:",string("记录已取出，可粘贴到对话"));}
+static id makeButton(const char*text,const char*action,Rect r){id b=((id(*)(id,SEL,long))msg)(cls("UIButton"),sel("buttonWithType:"),1);frame(b,r);settitle(b,text);((void(*)(id,SEL,id,SEL,JJAddr))msg)(b,sel("addTarget:action:forControlEvents:"),actions,sel(action),1ULL<<6);return b;}
+static void setup(void*p){
+ unsigned tries=(unsigned)(JJAddr)p;if(!cls("UIApplication")||!cls("UIWindow")){if(tries<12)dispatch_after_f(dispatch_time(0,3000000000LL),mainq,(void*)(JJAddr)(tries+1),setup);return;}
+ id app=send0(cls("UIApplication"),"sharedApplication"),host=send0(app,"keyWindow");if(!host)host=send0(send0(app,"windows"),"firstObject");id scene=send0(host,"windowScene");Rect hostBounds=host?((Rect(*)(id,SEL))msg)(host,sel("bounds")):(Rect){0,0,0,0};long hostOrientation=scene?((long(*)(id,SEL))msg)(scene,sel("interfaceOrientation")):0;
+ if(!host||!landscapeReady(hostBounds,hostOrientation)){dispatch_after_f(dispatch_time(0,1000000000LL),mainq,0,setup);return;}
+ id pool=make("NSAutoreleasePool");id prefs=send0(cls("NSUserDefaults"),"standardUserDefaults");performanceMode=((long(*)(id,SEL,id))msg)(prefs,sel("boolForKey:"),string("JJFour.performance"));id(*allocate)(id,const char*,JJSize)=symbol<id(*)(id,const char*,JJSize)>("objc_allocateClassPair");void(*reg)(id)=symbol<void(*)(id)>("objc_registerClassPair");int(*method)(id,SEL,void*,const char*)=symbol<int(*)(id,SEL,void*,const char*)>("class_addMethod");
+ id ac=allocate(cls("NSObject"),"JJFourStandaloneActions",0);if(!ac){send0(pool,"drain");return;}method(ac,sel("feature:"),(void*)featureAction,"v@:@");method(ac,sel("header:"),(void*)headerAction,"v@:@");method(ac,sel("log:"),(void*)logAction,"v@:@");method(ac,sel("toggle:"),(void*)toggleMenuAction,"v@:@");method(ac,sel("drag:"),(void*)dragAction,"v@:@");method(ac,sel("menuDrag:"),(void*)menuDragAction,"v@:@");method(ac,sel("orientation:"),(void*)orientationAction,"v@:@");method(ac,sel("customSpeed:"),(void*)customSpeedAction,"v@:@");method(ac,sel("restoreAll:"),(void*)restoreAllAction,"v@:@");method(ac,sel("preset:"),(void*)presetAction,"v@:@");method(ac,sel("stepSpeed:"),(void*)speedStepAction,"v@:@");method(ac,sel("performance:"),(void*)performanceAction,"v@:@");reg(ac);actions=make("JJFourStandaloneActions");
+ unsigned(*countImages)()=symbol<unsigned(*)()>("_dyld_image_count");const char*(*imageName)(unsigned)=symbol<const char*(*)(unsigned)>("_dyld_get_image_name");
+ if(countImages&&imageName){for(unsigned i=0;i<countImages();i++){const char*n=imageName(i),*base=n;if(!n)continue;for(const char*t=n;*t;t++)if(*t=='/')base=t+1;if(!strcmp(base,"YSH.dylib")||!strcmp(base,"YSH-range16.dylib"))blocked=true;}}
+ if(cls("MyMenu")&&cls("SpeedUDIDHelper"))blocked=true;
+ id overlayClass=allocate(cls("UIView"),"JJFourPassthroughView",0);if(!overlayClass){send0(pool,"drain");return;}method(overlayClass,sel("hitTest:withEvent:"),(void*)overlayHitTest,"@@:{CGPoint=dd}@");method(overlayClass,sel("layoutSubviews"),(void*)overlayLayout,"v@:");reg(overlayClass);
+ window=send0(host,"retain");Rect screen=hostBounds;floatingContainer=((id(*)(id,SEL,Rect))msg)(send0(overlayClass,"alloc"),sel("initWithFrame:"),(Rect){0,0,screen.w,screen.h});send1(floatingContainer,"setBackgroundColor:",send0(cls("UIColor"),"clearColor"));setnum(floatingContainer,"setAutoresizingMask:",18);send1(host,"addSubview:",floatingContainer);
+ menuCard=make("UIView");send1(menuCard,"setBackgroundColor:",color(.001,.008,.024,.985));radius(menuCard,22);setnum(menuCard,"setClipsToBounds:",1);border(menuCard,2.2,color(.015,.78,1,1));glow(menuCard,color(.005,.72,1),.72f,22.0);send1(floatingContainer,"addSubview:",menuCard);
+ if(!reduceTransparency()&&cls("UIBlurEffect")&&cls("UIVisualEffectView")){id effect=performanceMode?0:((id(*)(id,SEL,long))msg)(cls("UIBlurEffect"),sel("effectWithStyle:"),17);menuBlur=((id(*)(id,SEL,id))msg)(send0(cls("UIVisualEffectView"),"alloc"),sel("initWithEffect:"),effect);setnum(menuBlur,"setAutoresizingMask:",18);setnum(menuBlur,"setUserInteractionEnabled:",0);send1(menuCard,"addSubview:",menuBlur);send1(menuCard,"setBackgroundColor:",send0(cls("UIColor"),"clearColor"));glassTint=make("UIView");send1(glassTint,"setBackgroundColor:",color(.002,.012,.035,.84));setnum(glassTint,"setAutoresizingMask:",0);send1(send0(menuBlur,"contentView"),"addSubview:",glassTint);}
+ sideBar=make("UIView");send1(sideBar,"setBackgroundColor:",color(.002,.018,.045,.98));radius(sideBar,18);border(sideBar,1.2,color(.02,.62,.88,.82));glow(sideBar,color(.01,.64,1),.22f,10.0);send1(menuCard,"addSubview:",sideBar);sideNavHighlight=make("UIView");send1(sideNavHighlight,"setBackgroundColor:",color(.005,.30,.48,.98));radius(sideNavHighlight,12);border(sideNavHighlight,1.4,color(.02,.88,1,1));glow(sideNavHighlight,color(.01,.82,1),.65f,12.0);send1(sideBar,"addSubview:",sideNavHighlight);
+ sideNavLabel=make("UILabel");setnum(sideNavLabel,"setNumberOfLines:",0);send1(sideNavLabel,"setText:",string("⌂  功能控制\n\n◉  倍率设置\n\n▥  运行诊断\n\n▤  日志记录\n\n⚙  配置中心"));send1(sideNavLabel,"setTextColor:",color(.62,.83,.94));send1(sideNavLabel,"setFont:",((id(*)(id,SEL,double))msg)(cls("UIFont"),sel("boldSystemFontOfSize:"),13.0));send1(sideBar,"addSubview:",sideNavLabel);
+ sideMarkLabel=make("UILabel");setnum(sideMarkLabel,"setNumberOfLines:",0);setnum(sideMarkLabel,"setTextAlignment:",1);send1(sideMarkLabel,"setText:",string("◇\n✧\nJJFOUR\nCYAN NEXUS"));send1(sideMarkLabel,"setTextColor:",color(.08,.78,1));send1(sideMarkLabel,"setFont:",((id(*)(id,SEL,double))msg)(cls("UIFont"),sel("boldSystemFontOfSize:"),12.0));send1(sideBar,"addSubview:",sideMarkLabel);
+ rightPanel=make("UIView");send1(rightPanel,"setBackgroundColor:",color(.002,.015,.038,.985));radius(rightPanel,18);border(rightPanel,1.2,color(.02,.68,.94,.9));glow(rightPanel,color(.01,.65,1),.24f,9.0);send1(menuCard,"addSubview:",rightPanel);
+ runTitleLabel=make("UILabel");send1(runTitleLabel,"setText:",string("⌁  运行状态"));send1(runTitleLabel,"setTextColor:",color(.72,.96,1));send1(runTitleLabel,"setFont:",((id(*)(id,SEL,double))msg)(cls("UIFont"),sel("boldSystemFontOfSize:"),16.0));send1(rightPanel,"addSubview:",runTitleLabel);
+ runDetailLabel=make("UILabel");setnum(runDetailLabel,"setNumberOfLines:",0);send1(runDetailLabel,"setTextColor:",color(.36,.83,.95));send1(runDetailLabel,"setFont:",((id(*)(id,SEL,double))msg)(cls("UIFont"),sel("systemFontOfSize:"),13.0));send1(rightPanel,"addSubview:",runDetailLabel);
+ liveTitleLabel=make("UILabel");send1(liveTitleLabel,"setText:",string("▤  实时信息"));send1(liveTitleLabel,"setTextColor:",color(.72,.96,1));send1(liveTitleLabel,"setFont:",((id(*)(id,SEL,double))msg)(cls("UIFont"),sel("boldSystemFontOfSize:"),16.0));send1(rightPanel,"addSubview:",liveTitleLabel);
+ liveDetailLabel=make("UILabel");setnum(liveDetailLabel,"setNumberOfLines:",0);send1(liveDetailLabel,"setTextColor:",color(.36,.83,.95));send1(liveDetailLabel,"setFont:",((id(*)(id,SEL,double))msg)(cls("UIFont"),sel("systemFontOfSize:"),13.0));send1(rightPanel,"addSubview:",liveDetailLabel);
+ titleBar=make("UIView");send1(menuCard,"addSubview:",titleBar);
+ titleLabel=make("UILabel");send1(titleLabel,"setText:",string("◆  JJFOUR   CYAN OS v2.0"));send1(titleLabel,"setTextColor:",color(.82,.98,1));send1(titleLabel,"setFont:",((id(*)(id,SEL,double))msg)(cls("UIFont"),sel("boldSystemFontOfSize:"),25.0));send1(titleBar,"addSubview:",titleLabel);
+ subtitleLabel=make("UILabel");send1(subtitleLabel,"setText:",string("游戏控制中心  ·  GENSHIN IMPACT"));send1(subtitleLabel,"setTextColor:",color(.22,.72,.88));send1(subtitleLabel,"setFont:",((id(*)(id,SEL,double))msg)(cls("UIFont"),sel("systemFontOfSize:"),16.0));send1(titleBar,"addSubview:",subtitleLabel);
+ headerStatusLabel=make("UILabel");send1(headerStatusLabel,"setText:",string("● 运行中     ✓ 注入成功     FPS 60"));send1(headerStatusLabel,"setTextColor:",color(.25,.82,.94));send1(headerStatusLabel,"setFont:",((id(*)(id,SEL,double))msg)(cls("UIFont"),sel("boldSystemFontOfSize:"),15.0));send1(titleBar,"addSubview:",headerStatusLabel);
+ header=makeButton("✕","header:",{0,0,62,34});send1(titleBar,"addSubview:",header);
+ id menuPan=((id(*)(id,SEL,id,SEL))msg)(send0(cls("UIPanGestureRecognizer"),"alloc"),sel("initWithTarget:action:"),actions,sel("menuDrag:"));setnum(menuPan,"setCancelsTouchesInView:",1);setnum(menuPan,"setMaximumNumberOfTouches:",1);send1(titleBar,"addGestureRecognizer:",menuPan);
+ menuScroll=make("UIScrollView");setnum(menuScroll,"setShowsVerticalScrollIndicator:",0);send1(menuCard,"addSubview:",menuScroll);
+ customRow=make("UIView");send1(customRow,"setBackgroundColor:",color(.003,.02,.045,.99));radius(customRow,14);border(customRow,1.2,color(.02,.72,.96,.9));glow(customRow,color(.01,.62,1),.2f,7.0);send1(menuCard,"addSubview:",customRow);
+ customTitle=make("UILabel");send1(customTitle,"setText:",string("⚡  自定义攻速  /  RATE"));send1(customTitle,"setTextColor:",color(.68,.94,1));send1(customTitle,"setFont:",((id(*)(id,SEL,double))msg)(cls("UIFont"),sel("boldSystemFontOfSize:"),13.0));send1(customRow,"addSubview:",customTitle);
+ customHint=make("UILabel");send1(customHint,"setTextColor:",color(.38,.68,.78));send1(customHint,"setFont:",((id(*)(id,SEL,double))msg)(cls("UIFont"),sel("systemFontOfSize:"),9.0));send1(customRow,"addSubview:",customHint);
+ customInput=make("UITextField");send1(customInput,"setBackgroundColor:",color(.002,.014,.03));send1(customInput,"setTextColor:",color(.82,.98,1));border(customInput,.8,color(.03,.54,.72,.62));setnum(customInput,"setKeyboardType:",8);setnum(customInput,"setTextAlignment:",1);setnum(customInput,"setAutocorrectionType:",1);radius(customInput,8);setnum(customInput,"setFont:",0);send1(customInput,"setPlaceholder:",string("倍率"));id defaults=send0(cls("NSUserDefaults"),"standardUserDefaults");double saved=((double(*)(id,SEL,id))msg)(defaults,sel("doubleForKey:"),string("JJFour.customSpeed"));float last=(float)saved;if(!(last>0)||(jj_float(last)&0x7f800000U)==0x7f800000U)last=4;char initial[40];snprintf(initial,sizeof(initial),"%.7g",(double)last);send1(customInput,"setText:",string(initial));send1(customRow,"addSubview:",customInput);speedMinusButton=makeButton("−","stepSpeed:",{0,0,36,30});setnum(speedMinusButton,"setTag:",0);send1(speedMinusButton,"setBackgroundColor:",color(.008,.12,.20,.98));radius(speedMinusButton,8);border(speedMinusButton,1,color(.02,.58,.82,.8));send1(customRow,"addSubview:",speedMinusButton);speedPlusButton=makeButton("+","stepSpeed:",{0,0,36,30});setnum(speedPlusButton,"setTag:",1);send1(speedPlusButton,"setBackgroundColor:",color(.008,.12,.20,.98));radius(speedPlusButton,8);border(speedPlusButton,1,color(.02,.58,.82,.8));send1(customRow,"addSubview:",speedPlusButton);
+ const char *presetNames[]={"1×","2×","4×","8×"};for(unsigned i=0;i<4;i++){presetButtons[i]=makeButton(presetNames[i],"preset:",{0,0,60,26});setnum(presetButtons[i],"setTag:",i);send1(presetButtons[i],"setBackgroundColor:",color(.004,.07,.12,.98));radius(presetButtons[i],9);border(presetButtons[i],.9,color(.02,.58,.82,.78));send1(customRow,"addSubview:",presetButtons[i]);}
+ customButton=makeButton("应用","customSpeed:",{0,0,72,36});send1(customButton,"setBackgroundColor:",color(.005,.34,.54,.99));radius(customButton,10);border(customButton,1.6,color(.10,.90,1,1));glow(customButton,color(.02,.82,1),.55f,10.0);send1(customRow,"addSubview:",customButton);customSpinner=spinner(color(.35,.91,.77));send1(customRow,"addSubview:",customSpinner);
+ const char *featureGlyphs[]={"⚔","⌖","✦","◈"};for(unsigned i=0;i<4;i++){
+  rows[i]=make("UIView");send1(rows[i],"setBackgroundColor:",color(.002,.018,.045,.98));radius(rows[i],16);border(rows[i],1.5,color(.015,.72,1,.98));glow(rows[i],color(.005,.72,1),.42f,14.0);send1(menuScroll,"addSubview:",rows[i]);
+  featureIconLabels[i]=make("UILabel");send1(featureIconLabels[i],"setText:",string(featureGlyphs[i]));send1(featureIconLabels[i],"setTextColor:",color(.02,.78,1));send1(featureIconLabels[i],"setFont:",((id(*)(id,SEL,double))msg)(cls("UIFont"),sel("boldSystemFontOfSize:"),25.0));send1(rows[i],"addSubview:",featureIconLabels[i]);
+  nameLabels[i]=make("UILabel");send1(nameLabels[i],"setText:",string(jj_name(i)));send1(nameLabels[i],"setTextColor:",color(.86,.96,1));send1(nameLabels[i],"setFont:",((id(*)(id,SEL,double))msg)(cls("UIFont"),sel("boldSystemFontOfSize:"),15.0));send1(rows[i],"addSubview:",nameLabels[i]);
+  stateLabels[i]=make("UILabel");send1(stateLabels[i],"setFont:",((id(*)(id,SEL,double))msg)(cls("UIFont"),sel("systemFontOfSize:"),11.0));send1(rows[i],"addSubview:",stateLabels[i]);
+  buttons[i]=make("UISwitch");setnum(buttons[i],"setTag:",i);send1(buttons[i],"setOnTintColor:",color(.02,.78,1.));((void(*)(id,SEL,id,SEL,JJAddr))msg)(buttons[i],sel("addTarget:action:forControlEvents:"),actions,sel("feature:"),1ULL<<12);send1(rows[i],"addSubview:",buttons[i]);rowSpinners[i]=spinner(color(.35,.91,.77));send1(rows[i],"addSubview:",rowSpinners[i]);
+ }
+ restoreButton=makeButton("⟳  一键还原","restoreAll:",{0,0,140,38});send1(restoreButton,"setBackgroundColor:",color(.005,.28,.44,.99));radius(restoreButton,12);border(restoreButton,1.6,color(.02,.82,1,.96));glow(restoreButton,color(.02,.78,1),.48f,12.0);send1(menuCard,"addSubview:",restoreButton);
+ performanceButton=makeButton("✦  性能模式：关","performance:",{0,0,140,38});send1(performanceButton,"setBackgroundColor:",color(.008,.075,.14,.99));radius(performanceButton,12);border(performanceButton,1.5,color(.02,.66,.92,.9));glow(performanceButton,color(.01,.58,.9),.35f,9.0);send1(menuCard,"addSubview:",performanceButton);
+ statusLabel=make("UILabel");setnum(statusLabel,"setNumberOfLines:",1);send1(statusLabel,"setBackgroundColor:",color(.008,.035,.06,.96));radius(statusLabel,8);send1(statusLabel,"setTextColor:",color(.48,.78,.88));send1(statusLabel,"setFont:",((id(*)(id,SEL,double))msg)(cls("UIFont"),sel("systemFontOfSize:"),11.0));send1(statusLabel,"setText:",string(blocked?"检测到原YSH，请移除它后重新签名":"等待功能操作"));send1(rightPanel,"addSubview:",statusLabel);
+ logButton=makeButton("▤  导出诊断记录","log:",{0,0,270,36});send1(logButton,"setBackgroundColor:",color(.008,.075,.14,.99));radius(logButton,12);border(logButton,1.5,color(.02,.66,.92,.9));glow(logButton,color(.01,.58,.9),.35f,9.0);send1(menuCard,"addSubview:",logButton);
+ floatingButton=makeButton("JJ","toggle:",{0,0,52,52});send1(floatingButton,"setBackgroundColor:",color(.005,.32,.58));((void(*)(id,SEL,id,long))msg)(floatingButton,sel("setTitleColor:forState:"),color(1,1,1),0);radius(floatingButton,26);border(floatingButton,1.4,color(.42,.92,1,.92));id entryLayer=send0(floatingButton,"layer");send1(entryLayer,"setShadowColor:",send0(color(.01,.62,.95),"CGColor"));((void(*)(id,SEL,float))msg)(entryLayer,sel("setShadowOpacity:"),.42f);((void(*)(id,SEL,double))msg)(entryLayer,sel("setShadowRadius:"),8.0);((void(*)(id,SEL,Size))msg)(entryLayer,sel("setShadowOffset:"),(Size){0,3});
+ if(cls("CAGradientLayer")){id gradient=make("CAGradientLayer");frame(gradient,{0,0,52,52});((void(*)(id,SEL,double))msg)(gradient,sel("setCornerRadius:"),26.0);id colors[]={send0(color(.02,.72,.98),"CGColor"),send0(color(.015,.30,.78),"CGColor")};id array=((id(*)(id,SEL,const id*,JJSize))msg)(cls("NSArray"),sel("arrayWithObjects:count:"),colors,2);send1(gradient,"setColors:",array);((void(*)(id,SEL,Point))msg)(gradient,sel("setStartPoint:"),(Point){.1,0});((void(*)(id,SEL,Point))msg)(gradient,sel("setEndPoint:"),(Point){.9,1});((void(*)(id,SEL,id,unsigned))msg)(entryLayer,sel("insertSublayer:atIndex:"),gradient,0);}
+ floatingIcon=send1(cls("UIImage"),"systemImageNamed:",string("bolt.fill"));if(floatingIcon){id configuration=((id(*)(id,SEL,double,long))msg)(cls("UIImageSymbolConfiguration"),sel("configurationWithPointSize:weight:"),23.0,6);floatingIcon=send1(floatingIcon,"imageWithConfiguration:",configuration);send1(floatingButton,"setTintColor:",color(.95,1,1));}floatingSpinner=spinner(color(1,1,1));frame(floatingSpinner,{14,14,24,24});send1(floatingButton,"addSubview:",floatingSpinner);send1(floatingContainer,"addSubview:",floatingButton);
+ id pan=((id(*)(id,SEL,id,SEL))msg)(send0(cls("UIPanGestureRecognizer"),"alloc"),sel("initWithTarget:action:"),actions,sel("drag:"));setnum(pan,"setCancelsTouchesInView:",1);setnum(pan,"setMaximumNumberOfTouches:",1);send1(floatingButton,"addGestureRecognizer:",pan);
+ loadPositions();layoutMenu();menuVisible=false;applyPerformanceStyle();updateButtons();setnum(menuCard,"setHidden:",1);setnum(floatingContainer,"setHidden:",0);scheduleDim();
+ id center=send0(cls("NSNotificationCenter"),"defaultCenter");((void(*)(id,SEL,id,SEL,id,id))msg)(center,sel("addObserver:selector:name:object:"),actions,sel("orientation:"),string("UIDeviceOrientationDidChangeNotification"),0);send0(send0(cls("UIDevice"),"currentDevice"),"beginGeneratingDeviceOrientationNotifications");
+ logadd("JJFour CYAN OS v2.0（参考图像素级细节优化）\n四项功能独立两列卡片；倍率区、功能区、状态与操作区互不覆盖。\n菜单打开时隐藏悬浮球；核心功能逻辑保持原样。\n本地功能配置；搜索上限×16。无UDID、无网络认证。\n攻速判断/写入偏移：+20（十进制，即+0x14）。\n");send0(pool,"drain");
+}
+struct DlInfo{const char*file;void*base;const char*name;void*address;};
+__attribute__((constructor))static void start(){
+ msg=dlsym((void*)-2,"objc_msgSend");getClass=symbol<id(*)(const char*)>("objc_getClass");getSel=symbol<SEL(*)(const char*)>("sel_registerName");mainq=dlsym((void*)-2,"_dispatch_main_q");
+ regionFn=symbol<RegionFn>("mach_vm_region");readFn=symbol<ReadFn>("vm_read_overwrite");writeFn=symbol<WriteFn>("vm_write");deallocFn=symbol<int(*)(JJWord,JJWord)>("mach_port_deallocate");JJWord*t=symbol<JJWord*>("mach_task_self_");if(t)task=*t;
+ ticks=symbol<JJAddr(*)()>("mach_continuous_time");int(*timebase)(unsigned*)=symbol<int(*)(unsigned*)>("mach_timebase_info");unsigned tb[2]={1,1};if(timebase&&!timebase(tb)&&tb[1]){numer=tb[0];denom=tb[1];}
+ int(*addressInfo)(const void*,DlInfo*)=symbol<int(*)(const void*,DlInfo*)>("dladdr");DlInfo info={};if(addressInfo&&addressInfo((const void*)start,&info)&&info.base){unsigned char*h=(unsigned char*)info.base;JJWord n;memcpy(&n,h+16,4);JJSize off=32;JJAddr slide=0;for(JJWord i=0;i<n;i++){JJWord cmd,size;memcpy(&cmd,h+off,4);memcpy(&size,h+off+4,4);if(size<8)break;if(cmd==0x19&&h[off+10]=='T'){JJAddr vm;memcpy(&vm,h+off+24,8);slide=(JJAddr)h-vm;}off+=size;}off=32;ownLow=(JJAddr)h;ownHigh=ownLow;for(JJWord i=0;i<n;i++){JJWord cmd,size;memcpy(&cmd,h+off,4);memcpy(&size,h+off+4,4);if(size<8)break;if(cmd==0x19){JJAddr vm,len;memcpy(&vm,h+off+24,8);memcpy(&len,h+off+32,8);if(vm+slide+len>ownHigh)ownHigh=vm+slide+len;}off+=size;}}
+ if(msg&&getClass&&getSel&&mainq)dispatch_after_f(dispatch_time(0,10000000000LL),mainq,0,setup);
+}
