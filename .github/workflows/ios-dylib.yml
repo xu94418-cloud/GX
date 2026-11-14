@@ -1,0 +1,71 @@
+name: Build JJFour iOS dylib
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/ios-dylib.yml"
+      - "*.cpp"
+      - "*.hpp"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build arm64 iOS dylib
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Select Xcode toolchain
+        run: |
+          xcode-select -p
+          xcrun --sdk iphoneos --show-sdk-path
+
+      - name: Build JJFour.dylib
+        run: |
+          set -euo pipefail
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang++ \
+            -target arm64-apple-ios13.0 \
+            -isysroot "$SDK" \
+            -std=c++17 \
+            -O2 \
+            -fno-exceptions \
+            -fno-rtti \
+            -fno-stack-protector \
+            -fvisibility=hidden \
+            -Wall -Wextra -Werror \
+            -dynamiclib \
+            -Wl,-undefined,error \
+            -Wl,-install_name,@rpath/JJFour.dylib \
+            JJFour.cpp \
+            -o JJFour.dylib
+          file JJFour.dylib
+          xcrun --sdk iphoneos lipo -info JJFour.dylib
+
+      - name: Package test build
+        run: |
+          mkdir -p dist
+          cp JJFour.dylib dist/
+          shasum -a 256 dist/JJFour.dylib > dist/SHA256SUMS.txt
+          cat > dist/BUILD-INFO.txt <<'EOF'
+          Product: JJFour.dylib
+          Platform: iOS
+          Architecture: arm64
+          Minimum iOS: 13.0
+          Build type: unsigned test artifact
+          EOF
+
+      - name: Upload test dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: JJFour-iOS-arm64-test
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
