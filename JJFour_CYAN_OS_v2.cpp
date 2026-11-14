@@ -1,3 +1,4 @@
+// JJFOUR CYAN OS v2.0 standalone UIKit menu build; compiled as the JJFour.dylib entry source.
 #include "FourFeatures.hpp"
 #include "RestoreAll.hpp"
 extern "C" {
