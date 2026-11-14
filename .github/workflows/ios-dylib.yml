@@ -45,7 +45,7 @@ jobs:
             -dynamiclib \
             -Wl,-undefined,error \
             -Wl,-install_name,@rpath/JJFour.dylib \
-            JJFour.cpp \
+            JJFour_CYAN_OS_v2.cpp \
             -o JJFour.dylib
           file JJFour.dylib
           xcrun --sdk iphoneos lipo -info JJFour.dylib
