@@ -9,6 +9,7 @@ on:
       - ".github/workflows/ios-dylib.yml"
       - "*.cpp"
       - "*.hpp"
+      - "README.md"
 
 permissions:
   contents: read
