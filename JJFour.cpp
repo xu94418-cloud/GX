@@ -97,12 +97,12 @@ static void loadPositions(){id d=send0(cls("NSUserDefaults"),"standardUserDefaul
 static void layoutMenu(){Rect screen=screenRect();double w=screen.w-20;if(w>1200)w=1200;if(w<300)w=screen.w-12;double h=screen.h-16;if(h>900)h=900;if(h<260)h=screen.h-8;
  frame(floatingContainer,{0,0,screen.w,screen.h});floatingRect=snapEntry({floatingX*(screen.w-52),floatingY*(screen.h-52),52,52},screen);frame(floatingButton,floatingRect);
  menuRect=clampRect({(screen.w-w)/2,(screen.h-h)/2,w,h},screen);frame(menuCard,menuRect);frame(menuBlur,{0,0,w,h});frame(glassTint,{0,0,w,h});
- frame(titleBar,{0,0,w,52});frame(titleLabel,{22,8,w-150,24});frame(subtitleLabel,{23,31,w-160,16});frame(header,{w-88,10,68,30});
- frame(customRow,{18,62,w-36,76});frame(customTitle,{14,5,w-28,18});frame(customHint,{14,23,w-28,14});frame(customInput,{14,40,w-150,27});frame(customButton,{w-128,40,108,27});frame(customSpinner,{w-92,43,20,20});for(unsigned i=0;i<4;i++){double pw=(w-56)/4;frame(presetButtons[i],{20+i*(pw+4),58,pw,15});}
- double inner=w-36;double gap=12;double col=(inner-gap)/2;double sh=h-158;if(sh<80)sh=80;
- frame(menuScroll,{18,146,inner,sh});((void(*)(id,SEL,Size))msg)(menuScroll,sel("setContentSize:"),(Size){inner,sh});
- for(unsigned i=0;i<4;i++){double x=(i%2)*(col+gap);double y=(i/2)*62;frame(rows[i],{x,y,col,54});frame(nameLabels[i],{12,5,col-100,21});frame(stateLabels[i],{12,29,col-100,15});frame(buttons[i],{col-70,11,48,31});frame(rowSpinners[i],{col-58,15,24,24});}
- double rx=col+gap;double rw=col;frame(statusLabel,{rx,0,rw,55});frame(restoreButton,{rx,65,(rw-10)/2,34});frame(performanceButton,{rx+(rw+10)/2,65,(rw-10)/2,34});frame(logButton,{rx,110,rw,32});
+ frame(titleBar,{0,0,w,58});frame(titleLabel,{24,8,w-160,26});frame(subtitleLabel,{25,34,w-160,16});frame(header,{w-94,12,72,32});
+ frame(customRow,{18,68,w-36,100});frame(customTitle,{16,7,w-32,19});frame(customHint,{16,27,w-32,14});frame(customInput,{16,46,w-156,30});frame(customButton,{w-128,46,110,30});frame(customSpinner,{w-94,51,20,20});for(unsigned i=0;i<4;i++){double pw=(w-64)/4;frame(presetButtons[i],{24+i*(pw+4),80,pw,22});}
+ double inner=w-36;double gap=16;double col=(inner-gap)/2;double viewH=h-186;if(viewH<80)viewH=80;
+ frame(menuScroll,{18,178,inner,viewH});((void(*)(id,SEL,Size))msg)(menuScroll,sel("setContentSize:"),(Size){inner,420});
+ for(unsigned i=0;i<4;i++){double x=(i%2)*(col+gap);double y=(i/2)*112;frame(rows[i],{x,y,col,98});frame(nameLabels[i],{16,15,col-112,27});frame(stateLabels[i],{16,49,col-112,20});frame(buttons[i],{col-82,31,58,36});frame(rowSpinners[i],{col-65,37,24,24});}
+ frame(statusLabel,{0,232,inner,52});frame(restoreButton,{0,298,(inner-14)/2,44});frame(performanceButton,{(inner+14)/2,298,(inner-14)/2,44});frame(logButton,{0,356,inner,42});
 }
 static bool landscapeReady(Rect r,long orientation){return r.w>0&&r.h>0&&r.w>r.h&&(orientation==0||orientation==3||orientation==4);}
 static bool gameLandscape(){
@@ -168,9 +168,9 @@ static void customSpeedAction(id,SEL,id){
  if(!states[4].enabled){id text=send0(customInput,"text");text=((id(*)(id,SEL,id,id))msg)(text,sel("stringByReplacingOccurrencesOfString:withString:"),string(","),string("."));const char *raw=(const char*)send0(text,"UTF8String");float v;if(!parseSpeed(raw,&v)){send1(statusLabel,"setText:",string("请输入大于0的有效倍率，例如2.5"));return;}customJobSpeed=v;id d=send0(cls("NSUserDefaults"),"standardUserDefaults");((void(*)(id,SEL,double,id))msg)(d,sel("setDouble:forKey:"),(double)v,string("JJFour.customSpeed"));}
  beginJob(4);
 }
-static void finishMenuClose(void*p){if((unsigned)(JJAddr)p!=menuAnimationSerial||menuVisible)return;menuClosing=false;setnum(menuCard,"setHidden:",1);scheduleDim();}
+static void finishMenuClose(void*p){if((unsigned)(JJAddr)p!=menuAnimationSerial||menuVisible)return;menuClosing=false;setnum(menuCard,"setHidden:",1);setnum(floatingButton,"setHidden:",0);scheduleDim();}
 static void closeMenu(){send0(customInput,"resignFirstResponder");menuVisible=false;menuClosing=true;menuAnimationSerial++;animateAlpha(menuCard,0,.12);dispatch_after_f(dispatch_time(0,performanceMode||reduceMotion()?0:140000000LL),mainq,(void*)(JJAddr)menuAnimationSerial,finishMenuClose);}
-static void toggleMenuAction(id,SEL,id){wakeFloating();if(menuVisible){closeMenu();return;}menuVisible=true;menuClosing=false;menuAnimationSerial++;layoutMenu();setnum(menuCard,"setHidden:",0);((void(*)(id,SEL,double))msg)(menuCard,sel("setAlpha:"),0.0);animateAlpha(menuCard,1,.16);}
+static void toggleMenuAction(id,SEL,id){wakeFloating();if(menuVisible){closeMenu();return;}menuVisible=true;menuClosing=false;menuAnimationSerial++;layoutMenu();setnum(floatingButton,"setHidden:",1);setnum(menuCard,"setHidden:",0);((void(*)(id,SEL,double))msg)(menuCard,sel("setAlpha:"),0.0);animateAlpha(menuCard,1,.16);}
 static void headerAction(id,SEL,id){
  if(busy){if(!jobEnable){send1(statusLabel,"setText:",string("正在还原，请稍候"));return;}__atomic_store_n(&cancelFlag,1,__ATOMIC_RELAXED);send1(statusLabel,"setText:",string("正在取消，请稍候"));return;}
  closeMenu();
@@ -229,7 +229,7 @@ static void setup(void*p){
  id pan=((id(*)(id,SEL,id,SEL))msg)(send0(cls("UIPanGestureRecognizer"),"alloc"),sel("initWithTarget:action:"),actions,sel("drag:"));setnum(pan,"setCancelsTouchesInView:",1);setnum(pan,"setMaximumNumberOfTouches:",1);send1(floatingButton,"addGestureRecognizer:",pan);
  loadPositions();layoutMenu();menuVisible=false;applyPerformanceStyle();updateButtons();setnum(menuCard,"setHidden:",1);setnum(floatingContainer,"setHidden:",0);scheduleDim();
  id center=send0(cls("NSNotificationCenter"),"defaultCenter");((void(*)(id,SEL,id,SEL,id,id))msg)(center,sel("addObserver:selector:name:object:"),actions,sel("orientation:"),string("UIDeviceOrientationDidChangeNotification"),0);send0(send0(cls("UIDevice"),"currentDevice"),"beginGeneratingDeviceOrientationNotifications");
- logadd("JJFour NEON CYAN UI v10（菜单视觉重构）\n核心功能逻辑保持原样；仅更新菜单布局、色彩与控件样式。\n本地功能配置；搜索上限×16。无UDID、无网络认证。\n攻速判断/写入偏移：+20（十进制，即+0x14）。\n");send0(pool,"drain");
+ logadd("JJFour CYAN NEXUS UI v12（布局冲突修复）\n四项功能独立两列卡片；倍率区、功能区、状态与操作区互不覆盖。\n菜单打开时隐藏悬浮球；核心功能逻辑保持原样。\n本地功能配置；搜索上限×16。无UDID、无网络认证。\n攻速判断/写入偏移：+20（十进制，即+0x14）。\n");send0(pool,"drain");
 }
 struct DlInfo{const char*file;void*base;const char*name;void*address;};
 __attribute__((constructor))static void start(){
